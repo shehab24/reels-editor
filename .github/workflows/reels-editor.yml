@@ -34,7 +34,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Install ffmpeg and jq quickly
+          # Fast direct package install
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends ffmpeg jq curl
 
@@ -178,9 +178,9 @@ jobs:
           echo "FINAL_FILENAME=$FILENAME" >> $GITHUB_ENV
 
           # 1. Flip horizontally
-          # 2. Crop center square to strip baked-in top/bottom black bars
-          # 3. Scale up to fill the 1080x1920 canvas
-          # 4. Center-crop to 1080x1920 (eliminating side borders)
+          # 2. Extract center square: width = in_w, height = in_w, centered vertically (strips top/bottom black bars)
+          # 3. Scale up so height covers 1920
+          # 4. Center-crop to 1080x1920 (cuts off left/right borders and fills full 9:16 screen)
           # 5. Apply overlay template
           ffmpeg -y \
             -i input.mp4 \
@@ -188,8 +188,8 @@ jobs:
             -filter_complex "
               [0:v]
               hflip,
-              crop='min(iw,ih)':'min(iw,ih)':(iw-min(iw,ih))/2:(ih-min(iw,ih))/2,
-              scale=w=1080:h=1920:force_original_aspect_ratio=increase,
+              crop=in_w:in_w:0:(in_h-in_w)/2,
+              scale=1080:1920:force_original_aspect_ratio=increase,
               crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[video];
 
               [video][1:v]
