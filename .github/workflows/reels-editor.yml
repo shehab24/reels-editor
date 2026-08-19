@@ -34,13 +34,9 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # Fast direct package install
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends ffmpeg jq curl
-
-          # Install latest yt-dlp binary
-          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-          sudo chmod a+rx /usr/local/bin/yt-dlp
+          # ffmpeg, jq, and curl are already built into GitHub Actions runners.
+          # We only need to install yt-dlp via pip (takes ~2 seconds, zero apt-get lag).
+          pip install --no-cache-dir yt-dlp
 
       - name: Fetch Next Video URL & Title
         id: fetch_url
