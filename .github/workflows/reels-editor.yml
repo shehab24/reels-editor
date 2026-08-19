@@ -68,7 +68,6 @@ jobs:
             
             echo "Raw Sheet API Response: $API_RESPONSE"
 
-            # Validate whether the response is valid JSON
             if ! echo "$API_RESPONSE" | jq empty > /dev/null 2>&1; then
               echo "ERROR: Received non-JSON response from Google Sheet API (Check Apps Script permissions/deployment):"
               echo "$API_RESPONSE"
@@ -103,7 +102,6 @@ jobs:
           echo "Processing URL: $TARGET_URL"
           DOWNLOAD_SUCCESS=false
 
-          # 1. First Attempt: Direct download without proxy
           echo "Attempting direct download first..."
           yt-dlp "$TARGET_URL" \
             --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
@@ -119,7 +117,6 @@ jobs:
             DOWNLOAD_SUCCESS=true
           fi
 
-          # 2. Fallback: Try randomized proxies if direct download failed
           if [ "$DOWNLOAD_SUCCESS" = false ] && [ -n "${{ secrets.PROXY_LIST }}" ]; then
             echo "Direct download failed. Falling back to proxies list..."
             mapfile -t PROXIES < <(echo "${{ secrets.PROXY_LIST }}" | grep -v '^[[:space:]]*$' | shuf)
@@ -150,7 +147,6 @@ jobs:
             done
           fi
 
-          # 3. Validation check
           if [ "$DOWNLOAD_SUCCESS" = false ]; then
             echo "ERROR: Both direct download and all proxy attempts failed."
             exit 1
@@ -173,17 +169,15 @@ jobs:
           FILENAME="reel_${TIMESTAMP}.mp4"
           echo "FINAL_FILENAME=$FILENAME" >> $GITHUB_ENV
 
-          # 1. Flip horizontally
-          # 2. Scale with force_original_aspect_ratio=increase to fill the entire 1080x1920 frame
-          # 3. Center crop to exactly 1080x1920 (eliminates outer borders and square letterboxing)
-          # 4. Apply full-overlay.png on top
+          # Crop the center square out of letterboxed source, zoom, and fill 1080x1920
           ffmpeg -y \
             -i input.mp4 \
             -i full-overlay.png \
             -filter_complex "
               [0:v]
               hflip,
-              scale=w=1080:h=1920:force_original_aspect_ratio=increase,
+              crop=min(iw\,ih):min(iw\,ih):(iw-min(iw\,ih))/2:(ih-min(iw\,ih))/2,
+              scale=1080:1920:force_original_aspect_ratio=increase,
               crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[video];
 
               [video][1:v]
@@ -235,7 +229,6 @@ jobs:
             profile_id=$(echo "$profile" | xargs)
             if [ -n "$profile_id" ]; then
 
-              # Map platform metadata directly based on Channel ID
               if [ "$profile_id" = "6a74de6799afb4434914e171" ]; then
                 echo "----------------------------------------------------"
                 echo "Publishing to YouTube (Shorts) ID: $profile_id with Title: $YT_TITLE"
