@@ -34,9 +34,9 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          # ffmpeg, jq, and curl are already built into GitHub Actions runners.
-          # We only need to install yt-dlp via pip (takes ~2 seconds, zero apt-get lag).
-          pip install --no-cache-dir yt-dlp
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg jq curl python3-pip
+          pip3 install --upgrade --no-cache-dir yt-dlp
 
       - name: Fetch Next Video URL & Title
         id: fetch_url
@@ -68,7 +68,6 @@ jobs:
             
             echo "Raw Sheet API Response: $API_RESPONSE"
 
-            # Validate whether the response is valid JSON
             if ! echo "$API_RESPONSE" | jq empty > /dev/null 2>&1; then
               echo "ERROR: Received non-JSON response from Google Sheet API (Check Apps Script permissions/deployment):"
               echo "$API_RESPONSE"
@@ -174,9 +173,9 @@ jobs:
           echo "FINAL_FILENAME=$FILENAME" >> $GITHUB_ENV
 
           # 1. Flip horizontally
-          # 2. Extract center square: width = in_w, height = in_w, centered vertically (strips top/bottom black bars)
+          # 2. Extract center square (in_w by in_w) to strip top/bottom black bars
           # 3. Scale up so height covers 1920
-          # 4. Center-crop to 1080x1920 (cuts off left/right borders and fills full 9:16 screen)
+          # 4. Center-crop to 1080x1920 (eliminating side borders)
           # 5. Apply overlay template
           ffmpeg -y \
             -i input.mp4 \
