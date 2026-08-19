@@ -65,6 +65,16 @@ jobs:
           else
             echo "Fetching next pending URL from Google Sheet..."
             API_RESPONSE=$(curl -sL "${{ secrets.SHEET_API_URL }}?action=getNext")
+            
+            echo "Raw Sheet API Response: $API_RESPONSE"
+
+            # Validate whether the response is valid JSON
+            if ! echo "$API_RESPONSE" | jq empty > /dev/null 2>&1; then
+              echo "ERROR: Received non-JSON response from Google Sheet API (Check Apps Script permissions/deployment):"
+              echo "$API_RESPONSE"
+              exit 1
+            fi
+
             TARGET_URL=$(echo "$API_RESPONSE" | jq -r '.url')
             ROW_NUMBER=$(echo "$API_RESPONSE" | jq -r '.row')
             FETCHED_TITLE=$(echo "$API_RESPONSE" | jq -r '.title // empty')
@@ -86,15 +96,32 @@ jobs:
             echo "ROW_NUMBER=$ROW_NUMBER" >> $GITHUB_ENV
           fi
 
-      - name: Download Video (Proxies with Direct Fallback)
+      - name: Download Video (Direct First with Proxy Fallback)
         if: env.SKIP_JOB != 'true'
         run: |
           rm -f input.mp4
           echo "Processing URL: $TARGET_URL"
           DOWNLOAD_SUCCESS=false
 
-          # 1. Try randomized proxies if PROXY_LIST secret exists
-          if [ -n "${{ secrets.PROXY_LIST }}" ]; then
+          # 1. First Attempt: Direct download without proxy
+          echo "Attempting direct download first..."
+          yt-dlp "$TARGET_URL" \
+            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            --no-playlist \
+            -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
+            --merge-output-format mp4 \
+            --force-overwrites \
+            --socket-timeout 20 \
+            -o input.mp4 || true
+
+          if [ -s input.mp4 ] && [ $(wc -c < input.mp4) -gt 300000 ]; then
+            echo "SUCCESS: Direct download succeeded!"
+            DOWNLOAD_SUCCESS=true
+          fi
+
+          # 2. Fallback: Try randomized proxies if direct download failed
+          if [ "$DOWNLOAD_SUCCESS" = false ] && [ -n "${{ secrets.PROXY_LIST }}" ]; then
+            echo "Direct download failed. Falling back to proxies list..."
             mapfile -t PROXIES < <(echo "${{ secrets.PROXY_LIST }}" | grep -v '^[[:space:]]*$' | shuf)
             echo "Found ${#PROXIES[@]} proxies in list. Starting randomized attempts..."
 
@@ -123,27 +150,9 @@ jobs:
             done
           fi
 
-          # 2. Fallback: Direct download if proxies failed or expired
-          if [ "$DOWNLOAD_SUCCESS" = false ]; then
-            echo "Proxy attempts unsuccessful. Trying direct download fallback..."
-            yt-dlp "$TARGET_URL" \
-              --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-              --no-playlist \
-              -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" \
-              --merge-output-format mp4 \
-              --force-overwrites \
-              --socket-timeout 20 \
-              -o input.mp4 || true
-
-            if [ -s input.mp4 ] && [ $(wc -c < input.mp4) -gt 300000 ]; then
-              echo "SUCCESS: Direct download succeeded!"
-              DOWNLOAD_SUCCESS=true
-            fi
-          fi
-
           # 3. Validation check
           if [ "$DOWNLOAD_SUCCESS" = false ]; then
-            echo "ERROR: All proxy attempts and direct download fallback failed."
+            echo "ERROR: Both direct download and all proxy attempts failed."
             exit 1
           fi
 
@@ -164,14 +173,18 @@ jobs:
           FILENAME="reel_${TIMESTAMP}.mp4"
           echo "FINAL_FILENAME=$FILENAME" >> $GITHUB_ENV
 
+          # 1. Flip horizontally
+          # 2. Scale with force_original_aspect_ratio=increase to fill the entire 1080x1920 frame
+          # 3. Center crop to exactly 1080x1920 (eliminates outer borders and square letterboxing)
+          # 4. Apply full-overlay.png on top
           ffmpeg -y \
             -i input.mp4 \
             -i full-overlay.png \
             -filter_complex "
               [0:v]
               hflip,
-              scale=1080:2040:force_original_aspect_ratio=increase,
-              crop=1080:1920:(iw-1080)/2:120[video];
+              scale=w=1080:h=1920:force_original_aspect_ratio=increase,
+              crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[video];
 
               [video][1:v]
               overlay=0:0[out]
@@ -202,24 +215,12 @@ jobs:
           echo "VIDEO_PUBLIC_URL=$VIDEO_PUBLIC_URL" >> $GITHUB_ENV
           echo "Public asset URL: $VIDEO_PUBLIC_URL"
 
-      - name: Backup to Google Drive
-        if: env.SKIP_JOB != 'true'
-        run: |
-          sudo curl -s https://rclone.org/install.sh | sudo bash
-
-          rclone copy "$FINAL_FILENAME" :drive: \
-            --drive-client-id="${{ secrets.GDRIVE_CLIENT_ID }}" \
-            --drive-client-secret="${{ secrets.GDRIVE_CLIENT_SECRET }}" \
-            --drive-token='{"access_token":"","token_type":"Bearer","refresh_token":"${{ secrets.GDRIVE_REFRESH_TOKEN }}","expiry":"2000-01-01T00:00:00Z"}' \
-            --drive-root-folder-id="16kpxFtM9J0yCYwa1cCC7QHcKPz_INsri"
-
       - name: Publish to Buffer (shareNow)
         if: env.SKIP_JOB != 'true'
         env:
           BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
           BUFFER_PROFILE_IDS: ${{ secrets.BUFFER_PROFILE_ID }}
         run: |
-          # Formulate clean title and hashtags based on Google Sheet Column D
           RAW_TITLE="${{ env.VIDEO_TITLE }}"
           
           # YouTube Title (Includes #shorts)
@@ -315,4 +316,4 @@ jobs:
 
       - name: Done
         if: env.SKIP_JOB != 'true'
-        run: echo "Process complete! Video published to Buffer via shareNow, backed up to Google Drive, and logged in Google Sheet."
+        run: echo "Process complete! Video published to Buffer via shareNow and logged in Google Sheet."
