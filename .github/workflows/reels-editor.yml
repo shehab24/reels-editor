@@ -34,9 +34,9 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg jq curl python3-pip
-          pip3 install --upgrade --no-cache-dir yt-dlp
+          # Fast direct binary install: bypasses slow apt-get update
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
 
       - name: Fetch Next Video URL & Title
         id: fetch_url
@@ -68,6 +68,7 @@ jobs:
             
             echo "Raw Sheet API Response: $API_RESPONSE"
 
+            # Validate whether the response is valid JSON
             if ! echo "$API_RESPONSE" | jq empty > /dev/null 2>&1; then
               echo "ERROR: Received non-JSON response from Google Sheet API (Check Apps Script permissions/deployment):"
               echo "$API_RESPONSE"
@@ -102,6 +103,7 @@ jobs:
           echo "Processing URL: $TARGET_URL"
           DOWNLOAD_SUCCESS=false
 
+          # 1. First Attempt: Direct download without proxy
           echo "Attempting direct download first..."
           yt-dlp "$TARGET_URL" \
             --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
@@ -117,6 +119,7 @@ jobs:
             DOWNLOAD_SUCCESS=true
           fi
 
+          # 2. Fallback: Try randomized proxies if direct download failed
           if [ "$DOWNLOAD_SUCCESS" = false ] && [ -n "${{ secrets.PROXY_LIST }}" ]; then
             echo "Direct download failed. Falling back to proxies list..."
             mapfile -t PROXIES < <(echo "${{ secrets.PROXY_LIST }}" | grep -v '^[[:space:]]*$' | shuf)
@@ -147,6 +150,7 @@ jobs:
             done
           fi
 
+          # 3. Validation check
           if [ "$DOWNLOAD_SUCCESS" = false ]; then
             echo "ERROR: Both direct download and all proxy attempts failed."
             exit 1
@@ -169,15 +173,19 @@ jobs:
           FILENAME="reel_${TIMESTAMP}.mp4"
           echo "FINAL_FILENAME=$FILENAME" >> $GITHUB_ENV
 
-          # Crop the center square out of letterboxed source, zoom, and fill 1080x1920
+          # 1. Flip horizontally
+          # 2. Crop center square to strip baked-in top/bottom black bars
+          # 3. Scale up to fill the 1080x1920 canvas
+          # 4. Center-crop to 1080x1920 (eliminating side borders)
+          # 5. Apply overlay template
           ffmpeg -y \
             -i input.mp4 \
             -i full-overlay.png \
             -filter_complex "
               [0:v]
               hflip,
-              crop=min(iw\,ih):min(iw\,ih):(iw-min(iw\,ih))/2:(ih-min(iw\,ih))/2,
-              scale=1080:1920:force_original_aspect_ratio=increase,
+              crop='min(iw,ih)':'min(iw,ih)':(iw-min(iw,ih))/2:(ih-min(iw,ih))/2,
+              scale=w=1080:h=1920:force_original_aspect_ratio=increase,
               crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2[video];
 
               [video][1:v]
@@ -215,6 +223,7 @@ jobs:
           BUFFER_ACCESS_TOKEN: ${{ secrets.BUFFER_ACCESS_TOKEN }}
           BUFFER_PROFILE_IDS: ${{ secrets.BUFFER_PROFILE_ID }}
         run: |
+          # Formulate clean title and hashtags based on Google Sheet Column D
           RAW_TITLE="${{ env.VIDEO_TITLE }}"
           
           # YouTube Title (Includes #shorts)
@@ -229,6 +238,7 @@ jobs:
             profile_id=$(echo "$profile" | xargs)
             if [ -n "$profile_id" ]; then
 
+              # Map platform metadata directly based on Channel ID
               if [ "$profile_id" = "6a74de6799afb4434914e171" ]; then
                 echo "----------------------------------------------------"
                 echo "Publishing to YouTube (Shorts) ID: $profile_id with Title: $YT_TITLE"
